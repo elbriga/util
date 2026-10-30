@@ -106,6 +106,11 @@ acertar_relogio() {
     log "RELOGIO_SINCRONIZADO"
 }
 
+desligar_bip() {
+    log "Desativando bip da GoPro"
+    comando camera/BS '%00'
+}
+
 # Captura uma unica imagem e guarda o nome real que a camera lhe deu.
 foto_unica() {
     local slot="${1:-}" inicio="$(date +%Y%m%d_%H%M%S)" novos=""
@@ -279,6 +284,7 @@ fechar_ciclo() {
 rotina() {
     local hora="$(date +%H)" falhou=0
     verificar_conexao || return 1
+    desligar_bip
     case "$hora" in
         16)
             parar_timelapse
