@@ -24,10 +24,6 @@ log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*"; }
 erro() { log "ERRO: $*" >&2; return 1; }
 
 preparar() {
-    for dep in curl jq exiftool flock stat; do
-        command -v "$dep" >/dev/null || { erro "Falta instalar: $dep"; return 1; }
-    done
-    [[ "$GOPRO_SENHA" != "ALTERE_AQUI" ]] || { erro "Configure GOPRO_SENHA"; return 1; }
     mkdir -p "$ESTADO" "$BACKUP/.em_andamento"
     chmod 700 "$ESTADO"
     exec 9>"$ESTADO/execucao.lock"
@@ -308,7 +304,7 @@ rotina() {
 
 main() {
     preparar
-    case "${1:-cron}" in
+    case "${1:-uso}" in
         cron)               rotina ;;
         status)             verificar_conexao ;;
         foto)               verificar_conexao && foto_unica ;;
@@ -316,7 +312,7 @@ main() {
         parar)              verificar_conexao && parar_timelapse ;;
         sincronizar)        verificar_conexao && sincronizar_fotos "$STAGING" ;;
         fechar)             verificar_conexao && fechar_ciclo ;;
-        *) echo "Uso: $0 [cron|status|foto|iniciar|parar|sincronizar|fechar]" >&2; exit 2 ;;
+        uso) echo "Uso: $0 [cron|status|foto|iniciar|parar|sincronizar|fechar]" >&2; exit 2 ;;
     esac
 }
 main "$@"
