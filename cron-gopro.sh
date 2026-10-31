@@ -151,13 +151,24 @@ comando() {
 }
 
 verificar_conexao() {
-    if curl --noproxy '*' --interface "$WIFI_IFACE" -fsS \
-        --connect-timeout 3 --max-time 7 \
-        "${URL}/bacpac/sd" -o /dev/null; then
-        log "GOPRO_ONLINE ip=$GOPRO_IP"
-    else
-        erro "GOPRO_OFFLINE ip=$GOPRO_IP"
-    fi
+    local tentativa
+
+    for tentativa in 1 2 3; do
+        if curl --noproxy '*' --interface "$WIFI_IFACE" -fsS \
+            --connect-timeout 3 --max-time 7 \
+            "${URL}/bacpac/sd" -o /dev/null 2>/dev/null; then
+
+            log "GOPRO_ONLINE ip=$GOPRO_IP"
+            return 0
+        fi
+
+        if (( tentativa < 3 )); then
+            log "GOPRO_SEM_RESPOSTA tentativa=$tentativa/3; tentando novamente"
+            sleep 2
+        fi
+    done
+
+    erro "GOPRO_OFFLINE ip=$GOPRO_IP apos 3 tentativas"
 }
 
 desligar_bip() {
