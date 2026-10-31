@@ -333,9 +333,8 @@ foto_unica() {
         return 1
     }
 
-    [[ "$tipo" == "AVULSA" || "$tipo" == "MANUAL" ]] && luz_auxiliar OFF
-
     log "FOTO_DISPARADA tipo=$tipo slot=$slot"
+    [[ "$tipo" == "AVULSA" || "$tipo" == "MANUAL" ]] && { sleep 1; luz_auxiliar OFF }
     sleep 3
 
     if listar_midias "$TMP/depois.json" &&
