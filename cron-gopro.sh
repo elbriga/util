@@ -517,7 +517,7 @@ limpar_cartao() {
             return 0
         fi
     fi
-    
+
     log "LIMPEZA_INICIADA: apagando TODAS as midias da GoPro (backup=$destino)"
 
     # HERO3+: Delete All
@@ -680,7 +680,7 @@ main() {
             limpar_interativo
             ;;
 
-        uso)
+        *)
             echo "Uso: $0 [cron|status|foto|iniciar|parar|bip-off|sincronizar|fechar|limpar]" >&2
             return 2
             ;;
