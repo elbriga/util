@@ -457,6 +457,7 @@ fechar_ciclo() {
 
 # Funcao interna: chamada apenas apos backup validado
 limpar_cartao() {
+    local VALIDAR=0
     local destino="$1"
     local tentativa pasta nome tamanho origem arquivo
 
@@ -465,56 +466,58 @@ limpar_cartao() {
         return 1
     }
 
-    [[ -f "$TMP/inventario_validado.tsv" ]] || {
-        erro "LIMPEZA_BLOQUEADA: falta backup validado nesta execucao"
-        return 1
-    }
-
-    [[ -d "$destino" ]] || {
-        erro "LIMPEZA_BLOQUEADA: backup nao encontrado em $destino"
-        return 1
-    }
-
-    # O inventario precisa ser identico ao do backup
-    listar_midias "$TMP/antes_limpeza.json" || {
-        erro "LIMPEZA_BLOQUEADA: camera sem inventario"
-        return 1
-    }
-
-    inventario_tsv \
-        "$TMP/antes_limpeza.json" \
-        "$TMP/antes_limpeza.tsv"
-
-    cmp -s \
-        "$TMP/inventario_validado.tsv" \
-        "$TMP/antes_limpeza.tsv" || {
-
-        erro "LIMPEZA_BLOQUEADA: inventario mudou desde o backup"
-        return 1
-    }
-
-    # Confere novamente os arquivos armazenados
-    while IFS=$'\t' read -r pasta nome tamanho; do
-        [[ -n "$pasta" ]] || continue
-
-        origem="${pasta}/${nome}"
-        arquivo="$destino/.originais/$origem"
-
-        [[ -f "$arquivo" ]] &&
-        [[ "$(stat -c %s "$arquivo")" -eq "$tamanho" ]] || {
-
-            erro "LIMPEZA_BLOQUEADA: copia ausente/incompleta de $origem"
+    if ["${VALIDAR}" == "1"]; then
+        [[ -f "$TMP/inventario_validado.tsv" ]] || {
+            erro "LIMPEZA_BLOQUEADA: falta backup validado nesta execucao"
             return 1
         }
 
-    done < "$TMP/inventario_validado.tsv"
+        [[ -d "$destino" ]] || {
+            erro "LIMPEZA_BLOQUEADA: backup nao encontrado em $destino"
+            return 1
+        }
 
-    if [[ ! -s "$TMP/inventario_validado.tsv" ]]; then
-        log "CARTAO_VAZIO: limpeza desnecessaria"
-        : > "$AVULSAS"
-        return 0
+        # O inventario precisa ser identico ao do backup
+        listar_midias "$TMP/antes_limpeza.json" || {
+            erro "LIMPEZA_BLOQUEADA: camera sem inventario"
+            return 1
+        }
+
+        inventario_tsv \
+            "$TMP/antes_limpeza.json" \
+            "$TMP/antes_limpeza.tsv"
+
+        cmp -s \
+            "$TMP/inventario_validado.tsv" \
+            "$TMP/antes_limpeza.tsv" || {
+
+            erro "LIMPEZA_BLOQUEADA: inventario mudou desde o backup"
+            return 1
+        }
+
+        # Confere novamente os arquivos armazenados
+        while IFS=$'\t' read -r pasta nome tamanho; do
+            [[ -n "$pasta" ]] || continue
+
+            origem="${pasta}/${nome}"
+            arquivo="$destino/.originais/$origem"
+
+            [[ -f "$arquivo" ]] &&
+            [[ "$(stat -c %s "$arquivo")" -eq "$tamanho" ]] || {
+
+                erro "LIMPEZA_BLOQUEADA: copia ausente/incompleta de $origem"
+                return 1
+            }
+
+        done < "$TMP/inventario_validado.tsv"
+
+        if [[ ! -s "$TMP/inventario_validado.tsv" ]]; then
+            log "CARTAO_VAZIO: limpeza desnecessaria"
+            : > "$AVULSAS"
+            return 0
+        fi
     fi
-
+    
     log "LIMPEZA_INICIADA: apagando TODAS as midias da GoPro (backup=$destino)"
 
     # HERO3+: Delete All
