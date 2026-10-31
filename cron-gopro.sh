@@ -573,7 +573,7 @@ limpar_interativo() {
         return 1
     }
 
-    sincronizar_fotos "$STAGING" || return 1
+    #sincronizar_fotos "$STAGING" || return 1
 
     limpar_cartao "$STAGING"
 }
