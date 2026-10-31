@@ -11,6 +11,7 @@ GOPRO_SENHA="goprohero"
 WIFI_IFACE="wlan0"
 BACKUP="/srv/backup/gopro"
 ESTADO="/var/lib/gopro"
+MAX_FOTOS_SYNC=3                  # fotos sync por rodada
 PERMITIR_FORMATACAO=1             # 0 bloqueia inclusive 'limpar force'
 # =========================
 
@@ -466,6 +467,7 @@ baixar_foto() {
 sincronizar_fotos() {
     local pasta nome tamanho origem linha caminho instante tipo data ciclo destino
     local qt=0
+    local limite="${1:-$MAX_FOTOS_SYNC}"
 
     verificar_backup || return 1
 
@@ -496,6 +498,12 @@ sincronizar_fotos() {
             if [[ "$data" == "$tamanho" && -s "$caminho" ]]; then
                 continue
             fi
+        fi
+
+        # Limita apenas novos downloads, sem contar fotos ja copiadas
+        if (( limite > 0 && qt >= limite )); then
+            log "SYNC_LIMITE_ATINGIDO fotos=$qt limite=$limite"
+            break
         fi
 
         # Primeiro baixa em arquivo temporario;
@@ -603,7 +611,9 @@ limpar_cartao() {
 validar_backup_para_limpeza() {
     local pasta nome tamanho origem linha esperado caminho
 
-    sincronizar_fotos || return 1
+    # Limite 0 significa sincronizar tudo (uso na limpeza manual)
+    sincronizar_fotos "${1:-0}" || return 1
+
     cp "$TMP/inventario.tsv" "$TMP/validado.tsv"
 
     listar_midias "$TMP/antes_limpeza.json" || return 1
@@ -769,7 +779,7 @@ rotina() {
             log "LIMPEZA_DIARIA: sincronizando e validando cartao"
 
             # Sincroniza e valida tudo que ainda estiver no cartao
-            validar_backup_para_limpeza || {
+            validar_backup_para_limpeza "$MAX_FOTOS_SYNC" || {
                 erro "LIMPEZA_DIARIA_CANCELADA: backup nao validado; cartao preservado"
                 return 1
             }
