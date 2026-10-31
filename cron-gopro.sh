@@ -11,7 +11,7 @@ WIFI_IFACE="wlan0"
 BACKUP="/srv/backup/gopro-grow"
 ESTADO="/var/lib/gopro-grow"
 INTERVALO_TIMELAPSE="%3c" # %05=5s, %0a=10s, %1e=30s, %3c=60s
-PERMITIR_FORMATACAO=0     # Ativar somente apos validar os backups!
+PERMITIR_FORMATACAO=1     # Ativar somente apos validar os backups!
 # =========================
 
 URL="http://${GOPRO_IP}"
@@ -32,7 +32,9 @@ erro() {
 }
 
 preparar() {
-    for dep in curl jq exiftool flock stat; do
+    local dep
+
+    for dep in curl jq exiftool flock stat cmp comm; do
         command -v "$dep" >/dev/null || {
             erro "Falta instalar: $dep"
             return 1
@@ -47,7 +49,7 @@ preparar() {
     mkdir -p "$ESTADO" "$BACKUP/.em_andamento"
     chmod 700 "$ESTADO"
 
-    # Impede duas execucoes simultaneas
+    # Impede execucoes simultaneas
     exec 9>"$ESTADO/execucao.lock"
     flock -n 9 || {
         erro "ROTINA_OCUPADA: outra execucao esta ativa"
@@ -62,7 +64,7 @@ preparar() {
 comando() {
     local caminho="$1"
     local parametro="${2:-}"
-    local endereco="${URL}/$1?t=${GOPRO_SENHA}"
+    local endereco="${URL}/${caminho}?t=${GOPRO_SENHA}"
 
     [[ -z "$parametro" ]] || endereco+="&p=${parametro}"
 
@@ -87,12 +89,12 @@ verificar_conexao() {
     fi
 }
 
-# ===== INVENTARIO DO CARTAO =====
+# ===== INVENTARIO DE MIDIAS =====
 
 listar_midias() {
     local destino="$1"
 
-    curl --noproxy '*' --interface "$WIFI_IFACE" -fsS \
+    curl --noproxy '*' --interface "$WIFI_IFACE" -fLsS \
         --connect-timeout 5 --max-time 40 --retry 2 \
         "${MEDIA_URL}/gp/gpMediaList" \
         -o "$destino" || return 1
@@ -107,29 +109,23 @@ listar_midias() {
 }
 
 inventario_tsv() {
-    local json="$1"
-    local destino="$2"
-
     jq -r '
         .media[] |
         .d as $pasta |
         .fs[] |
         [$pasta, .n, (.s // "" | tostring)] |
         @tsv
-    ' "$json" | sort > "$destino"
+    ' "$1" | sort > "$2"
 }
 
 lista_de_fotos() {
-    local json="$1"
-    local destino="$2"
-
     jq -r '
         .media[] |
         .d as $pasta |
         .fs[] |
         select(.n | test("\\.(jpe?g)$"; "i")) |
         "\($pasta)/\(.n)"
-    ' "$json" | sort -u > "$destino"
+    ' "$1" | sort -u > "$2"
 }
 
 # ===== CONTROLE DA CAMERA =====
@@ -161,7 +157,6 @@ iniciar_timelapse() {
     log "TIMELAPSE_INICIADO"
 }
 
-# Sincroniza o relogio da GoPro com o Raspberry Pi
 acertar_relogio() {
     local aa mm dd hh mi ss v byte payload=""
 
@@ -181,103 +176,89 @@ acertar_relogio() {
 
 foto_unica() {
     local slot="${1:-}"
-    local inicio
-    local novos=""
-    local tentativa
+    local inicio novos="" tentativa qtd
 
     inicio="$(date +%Y%m%d_%H%M%S)"
 
-    # Evita disparar duas vezes na mesma hora
-    if [[ -n "$slot" ]]; then
-        if [[ -e "$ESTADO/foto_${slot}.tentada" ]]; then
-            log "FOTO_JA_TENTADA slot=$slot"
-            return 0
-        fi
+    # Evita duplicar a foto do mesmo horario
+    if [[ -n "$slot" &&
+          -e "$ESTADO/foto_${slot}.tentada" ]]; then
+        log "FOTO_JA_TENTADA slot=$slot"
+        return 0
     fi
 
-    # Guarda a lista antes do disparo
     listar_midias "$TMP/antes.json" || {
-        erro "Nao foi possivel listar fotos antes do disparo"
+        erro "Inventario indisponivel antes da foto"
         return 1
     }
 
     lista_de_fotos "$TMP/antes.json" "$TMP/antes.txt"
 
-    # Registra antes de disparar para evitar duplicatas
-    if [[ -n "$slot" ]]; then
-        printf '%s\n' "$inicio" \
-            > "$ESTADO/foto_${slot}.tentada"
-    fi
+    # Marca a tentativa antes do disparo
+    [[ -z "$slot" ]] || \
+        printf '%s\n' "$inicio" > "$ESTADO/foto_${slot}.tentada"
 
     log "Disparando FOTO_AVULSA slot=${slot:-manual}"
 
-    comando camera/CM '%01' || {
-        erro "Falha ao mudar para modo foto"
-        return 1
-    }
+    comando camera/CM '%01' || return 1
     sleep 2
 
-    comando camera/CS '%00' || {
-        erro "Falha ao selecionar foto unica"
-        return 1
-    }
+    comando camera/CS '%00' || return 1
     sleep 2
 
     comando bacpac/SH '%01' || {
-        erro "Falha ou resposta incerta do obturador"
+        erro "Obturador falhou ou resposta incerta; nao repetir automaticamente"
         return 1
     }
 
     sleep 4
 
-    # Identifica o arquivo criado
+    # Descobre qual arquivo foi criado
     for tentativa in 1 2 3 4; do
+
         if listar_midias "$TMP/depois.json"; then
             lista_de_fotos "$TMP/depois.json" "$TMP/depois.txt"
 
             novos="$(comm -13 \
                 "$TMP/antes.txt" "$TMP/depois.txt")"
 
-            [[ -n "$novos" ]] && break
+            [[ -z "$novos" ]] || break
         fi
 
         sleep 3
     done
 
-    if [[ "$(printf '%s\n' "$novos" |
-        sed '/^$/d' | wc -l)" -ne 1 ]]; then
+    qtd="$(printf '%s\n' "$novos" |
+        sed '/^$/d' | wc -l)"
 
-        erro "FOTO_NAO_IDENTIFICADA: nao vou repetir disparo"
+    [[ "$qtd" -eq 1 ]] || {
+        erro "FOTO_NAO_IDENTIFICADA (novas=$qtd), nao repetir disparo"
         return 1
-    fi
+    }
 
-    # Registra qual foto foi tirada manualmente
+    # Identifica a foto avulsa para renomear no backup
     printf '%s\t%s\n' "$novos" "$inicio" >> "$AVULSAS"
 
     log "FOTO_AVULSA_OK origem=$novos horario=$inicio"
 }
 
-# ===== DOWNLOAD DE FOTO =====
+# ===== DOWNLOAD =====
 
 baixar_foto() {
     local origem="$1"
     local arquivo="$2"
     local tamanho="$3"
 
-    local tentativa
-    local recebido=""
-    local resposta=""
-    local tipo_recebido=""
-    local transferencia_ok=0
+    local tentativa recebido="" resposta="" tipo=""
+    local concluido=0
 
     log "Baixando $origem (esperado=$tamanho bytes)"
 
     for tentativa in 1 2 3; do
-
         rm -f "$arquivo.part" "$arquivo.part.headers"
 
-        # Segue redirecionamentos e registra diagnostico HTTP
-        resposta="$(curl \
+        # Segue redirecionamentos e registra resposta HTTP
+        if ! resposta="$(curl \
             --noproxy '*' \
             --interface "$WIFI_IFACE" \
             -fLsS \
@@ -289,91 +270,83 @@ baixar_foto() {
             -D "$arquivo.part.headers" \
             -w 'http=%{http_code} content_type=%{content_type} bytes_http=%{size_download}' \
             "${MEDIA_URL}/videos/DCIM/${origem}" \
-            -o "$arquivo.part")" || {
+            -o "$arquivo.part")"; then
 
             log "DOWNLOAD_FALHOU arquivo=$origem tentativa=$tentativa detalhe=$resposta"
             sleep 2
             continue
-        }
+        fi
 
         recebido="$(stat -c %s "$arquivo.part")"
 
-        tipo_recebido="$(
+        tipo="$(
             exiftool -s3 -FileType "$arquivo.part" \
                 2>/dev/null || true
         )"
 
-        log "DOWNLOAD_RESPOSTA arquivo=$origem tentativa=$tentativa esperado=$tamanho recebido=$recebido tipo=$tipo_recebido $resposta"
+        log "DOWNLOAD_RESPOSTA arquivo=$origem tentativa=$tentativa esperado=$tamanho recebido=$recebido tipo=$tipo $resposta"
 
-        # So aceita um JPEG com tamanho igual ao inventario
         if [[ "$recebido" -eq "$tamanho" &&
-              "$tipo_recebido" == "JPEG" ]]; then
+              "$tipo" == "JPEG" ]]; then
 
             mv -f "$arquivo.part" "$arquivo"
             rm -f "$arquivo.part.headers"
 
-            transferencia_ok=1
+            concluido=1
             break
         fi
 
-        log "DOWNLOAD_INVALIDO tentativa=$tentativa"
         sleep 2
     done
 
-    if [[ "$transferencia_ok" -ne 1 ]]; then
-
-        # Preserva arquivos para diagnostico
-        erro "DOWNLOAD_INVALIDO arquivo=$origem esperado=$tamanho recebido=${recebido:-desconhecido} tipo=${tipo_recebido:-desconhecido} parte=$arquivo.part headers=$arquivo.part.headers"
-
+    [[ "$concluido" -eq 1 ]] || {
+        erro "DOWNLOAD_INVALIDO arquivo=$origem esperado=$tamanho recebido=${recebido:-?} tipo=${tipo:-?} parte=$arquivo.part"
         return 1
-    fi
+    }
 
     log "DOWNLOAD_OK arquivo=$origem bytes=$recebido"
 }
 
-# ===== SINCRONIZACAO =====
+# ===== BACKUP =====
 
 sincronizar_fotos() {
     local destino="$1"
     local linhas="$TMP/inventario.tsv"
 
     local pasta nome tamanho origem arquivo
-    local tipo horario foto nome_final
-    local qt=0
+    local horario tipo foto nome_final qt=0
 
     listar_midias "$TMP/midias.json" || {
-        erro "Inventario da GoPro indisponivel"
+        erro "Inventario indisponivel"
         return 1
     }
 
     inventario_tsv "$TMP/midias.json" "$linhas"
-
     mkdir -p "$destino/.originais"
 
-    # Verifica se existem arquivos inesperados no cartao
+    # Rejeita midias nao suportadas ou inventario invalido
     while IFS=$'\t' read -r pasta nome tamanho; do
         [[ -n "$pasta" ]] || continue
 
         [[ "$nome" =~ \.[Jj][Pp][Ee]?[Gg]$ ]] || {
-            erro "Arquivo nao-JPEG no cartao: $pasta/$nome"
+            erro "Midia nao-JPEG: $pasta/$nome"
             return 1
         }
 
         [[ "$pasta" =~ ^[A-Za-z0-9_-]+$ &&
            "$nome" =~ ^[A-Za-z0-9_.-]+$ ]] || {
-            erro "Nome de arquivo inesperado: $pasta/$nome"
+            erro "Nome inesperado: $pasta/$nome"
             return 1
         }
 
         [[ "$tamanho" =~ ^[0-9]+$ &&
            "$tamanho" -gt 0 ]] || {
-            erro "Tamanho indisponivel: $pasta/$nome"
+            erro "Tamanho invalido: $pasta/$nome"
             return 1
         }
-
     done < "$linhas"
 
-    # Baixa e organiza as fotografias
+    # Baixa cada fotografia e cria o nome cronologico
     while IFS=$'\t' read -r pasta nome tamanho; do
         [[ -n "$pasta" ]] || continue
 
@@ -382,7 +355,6 @@ sincronizar_fotos() {
 
         mkdir -p "$(dirname "$arquivo")"
 
-        # Nao baixa novamente um arquivo ja completo
         if [[ ! -f "$arquivo" ]] ||
            [[ "$(stat -c %s "$arquivo")" -ne "$tamanho" ]]; then
 
@@ -392,11 +364,11 @@ sincronizar_fotos() {
 
         tipo="TL"
 
-        # Data da captura registrada no EXIF da foto
         horario="$(
             exiftool -s3 \
                 -d '%Y%m%d_%H%M%S' \
-                -DateTimeOriginal "$arquivo" | head -n1
+                -DateTimeOriginal "$arquivo" \
+                2>/dev/null | head -n1 || true
         )"
 
         [[ "$horario" =~ ^[0-9]{8}_[0-9]{6}$ ]] || {
@@ -404,8 +376,9 @@ sincronizar_fotos() {
             return 1
         }
 
-        # Identifica as fotos avulsas
+        # Verifica se esta foto foi uma captura avulsa
         if [[ -f "$AVULSAS" ]]; then
+
             foto="$(
                 awk -F '\t' -v origem="$origem" \
                     '$1 == origem {print $2; exit}' "$AVULSAS"
@@ -419,21 +392,19 @@ sincronizar_fotos() {
 
         nome_final="${horario}_${tipo}_${pasta}_${nome}"
 
-        # Cria um hardlink com nome ordenavel
+        # Hardlink evita duplicar fisicamente a fotografia
         if [[ -e "$destino/$nome_final" ]]; then
 
             [[ "$arquivo" -ef "$destino/$nome_final" ]] || {
                 erro "Colisao de nome: $nome_final"
                 return 1
             }
-
         else
             ln "$arquivo" "$destino/$nome_final"
         fi
 
-        # Confere o tamanho do arquivo final
         [[ "$(stat -c %s "$destino/$nome_final")" -eq "$tamanho" ]] || {
-            erro "Falha de verificacao: $nome_final"
+            erro "Tamanho final invalido: $nome_final"
             return 1
         }
 
@@ -441,7 +412,7 @@ sincronizar_fotos() {
 
     done < "$linhas"
 
-    # Confirma que o cartao nao mudou durante o backup
+    # Confirma que nenhuma foto mudou durante o backup
     listar_midias "$TMP/conferencia.json" || return 1
 
     inventario_tsv \
@@ -449,64 +420,115 @@ sincronizar_fotos() {
         "$TMP/conferencia.tsv"
 
     cmp -s "$linhas" "$TMP/conferencia.tsv" || {
-        erro "Inventario mudou durante o backup"
+        erro "Inventario mudou durante backup; limpeza bloqueada"
         return 1
     }
+
+    # Autoriza limpeza apenas nesta execucao
+    cp "$linhas" "$TMP/inventario_validado.tsv"
 
     log "BACKUP_VALIDADO fotos=$qt diretorio=$destino"
 }
 
-# ===== FECHAMENTO DO CICLO =====
-
+# Fecha o backup sem alterar o cartao
 fechar_ciclo() {
     local destino="$STAGING"
-    local tentativa
-
-    log "Fechando ciclo $DIA"
 
     if [[ -d "$FINAL" && -d "$STAGING" ]]; then
-        erro "Existem STAGING e FINAL simultaneamente"
+        erro "Existem STAGING e FINAL simultaneamente para $DIA"
         return 1
     fi
 
     [[ -d "$FINAL" ]] && destino="$FINAL"
 
-    # Sincronizacao completa antes de apagar qualquer coisa
+    log "Fechando backup do ciclo $DIA"
+
     sincronizar_fotos "$destino" || return 1
 
-    # Torna o backup definitivo
     if [[ "$destino" == "$STAGING" ]]; then
         mv -T "$STAGING" "$FINAL"
         log "PASTA_DO_DIA_CRIADA $FINAL"
     fi
 
-    # Protecao contra limpeza acidental
-    if [[ "$PERMITIR_FORMATACAO" != 1 ]]; then
-        log "LIMPEZA_DESATIVADA: backup concluido; SD preservado"
-        return 0
-    fi
+    log "CICLO_BACKUP_FECHADO (cartao nao foi alterado)"
+}
 
-    # Cartao ja vazio
-    if [[ ! -s "$TMP/inventario.tsv" ]]; then
-        log "CARTAO_VAZIO: nenhuma limpeza necessaria"
+# ===== LIMPEZA DO CARTAO =====
+
+# Funcao interna: chamada apenas apos backup validado
+limpar_cartao() {
+    local destino="$1"
+    local tentativa pasta nome tamanho origem arquivo
+
+    [[ "$PERMITIR_FORMATACAO" == 1 ]] || {
+        erro "LIMPEZA_CANCELADA: PERMITIR_FORMATACAO=0"
+        return 1
+    }
+
+    [[ -f "$TMP/inventario_validado.tsv" ]] || {
+        erro "LIMPEZA_BLOQUEADA: falta backup validado nesta execucao"
+        return 1
+    }
+
+    [[ -d "$destino" ]] || {
+        erro "LIMPEZA_BLOQUEADA: backup nao encontrado em $destino"
+        return 1
+    }
+
+    # O inventario precisa ser identico ao do backup
+    listar_midias "$TMP/antes_limpeza.json" || {
+        erro "LIMPEZA_BLOQUEADA: camera sem inventario"
+        return 1
+    }
+
+    inventario_tsv \
+        "$TMP/antes_limpeza.json" \
+        "$TMP/antes_limpeza.tsv"
+
+    cmp -s \
+        "$TMP/inventario_validado.tsv" \
+        "$TMP/antes_limpeza.tsv" || {
+
+        erro "LIMPEZA_BLOQUEADA: inventario mudou desde o backup"
+        return 1
+    }
+
+    # Confere novamente os arquivos armazenados
+    while IFS=$'\t' read -r pasta nome tamanho; do
+        [[ -n "$pasta" ]] || continue
+
+        origem="${pasta}/${nome}"
+        arquivo="$destino/.originais/$origem"
+
+        [[ -f "$arquivo" ]] &&
+        [[ "$(stat -c %s "$arquivo")" -eq "$tamanho" ]] || {
+
+            erro "LIMPEZA_BLOQUEADA: copia ausente/incompleta de $origem"
+            return 1
+        }
+
+    done < "$TMP/inventario_validado.tsv"
+
+    if [[ ! -s "$TMP/inventario_validado.tsv" ]]; then
+        log "CARTAO_VAZIO: limpeza desnecessaria"
         : > "$AVULSAS"
         return 0
     fi
 
-    log "APAGANDO_MIDIAS_DO_CARTAO backup=$FINAL"
+    log "LIMPEZA_INICIADA: apagando TODAS as midias da GoPro (backup=$destino)"
 
-    # DA = Delete All, comando da HERO3+
+    # HERO3+: Delete All
     if ! comando camera/DA; then
-        log "AVISO: resposta da exclusao incerta"
+        log "AVISO: resposta de camera/DA incerta; verificando o cartao"
     fi
 
-    # Confirma a limpeza consultando novamente o inventario
-    for tentativa in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    # Espera e confirma que nao restaram midias
+    for tentativa in {1..12}; do
         sleep 5
 
-        if listar_midias "$TMP/apos_limpeza.json" &&
+        if listar_midias "$TMP/depois_limpeza.json" &&
            jq -e '([.media[]?.fs[]?] | length) == 0' \
-               "$TMP/apos_limpeza.json" >/dev/null; then
+               "$TMP/depois_limpeza.json" >/dev/null; then
 
             : > "$AVULSAS"
 
@@ -515,13 +537,51 @@ fechar_ciclo() {
         fi
     done
 
-    erro "LIMPEZA_NAO_CONFIRMADA; conferir antes do novo ciclo"
+    erro "LIMPEZA_NAO_CONFIRMADA: confira o cartao manualmente"
+}
+
+# Comando manual com confirmacao
+limpar_interativo() {
+    local confirmacao
+
+    # Verifica a permissao antes de qualquer operacao
+    [[ "$PERMITIR_FORMATACAO" == 1 ]] || {
+        erro "LIMPEZA_CANCELADA: PERMITIR_FORMATACAO=0; altere a configuracao para 1"
+        return 1
+    }
+
+    [[ -t 0 ]] || {
+        erro "LIMPEZA_CANCELADA: comando limpar requer terminal interativo"
+        return 1
+    }
+
+    printf 'ATENCAO: todas as midias do microSD serao apagadas APOS backup validado.\n'
+
+    read -r -p 'Digite sim para continuar: ' confirmacao ||
+        return 1
+
+    if [[ "$confirmacao" != sim ]]; then
+        log "LIMPEZA_CANCELADA: confirmacao diferente de sim"
+        return 1
+    fi
+
+    verificar_conexao || return 1
+
+    # Para a captura antes de copiar e limpar
+    parar_timelapse || {
+        erro "Nao foi possivel confirmar parada; limpeza cancelada"
+        return 1
+    }
+
+    sincronizar_fotos "$STAGING" || return 1
+
+    limpar_cartao "$STAGING"
 }
 
 # ===== ROTINA DO CRON =====
 
 rotina() {
-    local hora
+    local hora marcador
     hora="$(date +%H)"
 
     verificar_conexao || return 1
@@ -530,40 +590,54 @@ rotina() {
 
         16)
             # Luz do grow apaga
-            parar_timelapse
+            parar_timelapse || return 1
 
             log "PRE_BACKUP_INICIADO"
             sincronizar_fotos "$STAGING"
             ;;
 
         17|18|19|20|21)
-            # Uma foto avulsa por hora
+            # Foto avulsa da hora
             foto_unica "$(date +%Y%m%d_%H)"
             ;;
 
         22)
-            # Luz acende: fecha backup, limpa e reinicia
-            parar_timelapse || return 1
+            # Impede executar duas vezes no mesmo dia
+            marcador="$ESTADO/ciclo_22_${DIA}.feito"
 
+            if [[ -e "$marcador" ]]; then
+                log "CICLO_22_JA_EXECUTADO dia=$DIA"
+                return 0
+            fi
+
+            # Fecha o ciclo anterior
+            parar_timelapse || return 1
             fechar_ciclo || return 1
 
-            acertar_relogio || return 1
+            # Limpeza automatica somente se habilitada
+            if [[ "$PERMITIR_FORMATACAO" == 1 ]]; then
+                limpar_cartao "$FINAL" || return 1
+            else
+                log "AVISO: PERMITIR_FORMATACAO=0; limpeza ignorada, fotos permanecem na GoPro"
+            fi
 
-            iniciar_timelapse
+            # Inicia novo timelapse
+            acertar_relogio || return 1
+            iniciar_timelapse || return 1
+
+            : > "$marcador"
             ;;
 
         *)
-            # Demais horas: apenas conectividade
             log "Apenas monitoramento nesta hora"
             ;;
-
     esac
 }
 
 # ===== COMANDOS MANUAIS =====
 
 main() {
-    preparar
+    preparar || return 1
 
     case "${1:-uso}" in
 
@@ -599,9 +673,13 @@ main() {
             verificar_conexao && fechar_ciclo
             ;;
 
+        limpar)
+            limpar_interativo
+            ;;
+
         uso)
-            echo "Uso: $0 [cron|status|foto|iniciar|parar|bip-off|sincronizar|fechar]" >&2
-            exit 2
+            echo "Uso: $0 [cron|status|foto|iniciar|parar|bip-off|sincronizar|fechar|limpar]" >&2
+            return 2
             ;;
     esac
 }
