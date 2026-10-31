@@ -34,7 +34,7 @@ erro() {
 preparar() {
     local dep
 
-    for dep in curl jq exiftool flock stat cmp comm; do
+    for dep in curl jq jpeginfo exiftool flock stat cmp comm; do
         command -v "$dep" >/dev/null || {
             erro "Falta instalar: $dep"
             return 1
@@ -108,13 +108,92 @@ listar_midias() {
     ' "$destino" >/dev/null
 }
 
+validar_grupos() {
+    local json="$1" destino="$2"
+    local pasta nome inicio fim total soma n arquivo membro
+    local ini_num fim_num
+
+    jq -r '
+        .media[] | .d as $p | .fs[] |
+        select(has("g") and has("b") and has("l")) |
+        [$p, .n, .b, .l, .s] | @tsv
+    ' "$json" > "$TMP/grupos.tsv" || return 1
+
+    while IFS=$'\t' read -r pasta nome inicio fim total; do
+        [[ -n "$pasta" ]] || continue
+
+        [[ "$nome" =~ ^G[0-9]{7}\.JPG$ &&
+           "$inicio" =~ ^[0-9]+$ &&
+           "$fim" =~ ^[0-9]+$ &&
+           "$total" =~ ^[0-9]+$ ]] || {
+            erro "Dados invalidos no grupo: $nome"
+            return 1
+        }
+
+        ini_num=$((10#$inicio))
+        fim_num=$((10#$fim))
+        soma=0
+
+        for ((n=ini_num; n<=fim_num; n++)); do
+            printf -v membro '%s%04d.JPG' \
+                "${nome:0:4}" "$n"
+
+            arquivo="$destino/.originais/$pasta/$membro"
+
+            [[ -f "$arquivo" ]] &&
+            jpeginfo -c "$arquivo" >/dev/null 2>&1 || {
+                erro "Membro ausente ou JPEG invalido: $pasta/$membro"
+                return 1
+            }
+
+            soma=$((soma + $(stat -c %s "$arquivo")))
+        done
+
+        [[ "$soma" -eq "$total" ]] || {
+            erro "GRUPO_INCOMPLETO nome=$nome esperado=$total recebido=$soma"
+            return 1
+        }
+
+        log "GRUPO_VALIDADO $nome fotos=$((fim_num-ini_num+1)) bytes=$soma"
+    done < "$TMP/grupos.tsv"
+}
+
 inventario_tsv() {
     jq -r '
         .media[] |
         .d as $pasta |
         .fs[] |
-        [$pasta, .n, (.s // "" | tostring)] |
-        @tsv
+
+        if (has("g") or has("b") or has("l")) then
+            if (has("g") and has("b") and has("l") and
+                ((.m // []) | length == 0)) then
+
+                . as $grupo |
+
+                if ($grupo.n | test("^G[0-9]{7}\\.JPG$")) then
+                    range(
+                        ($grupo.b | tonumber);
+                        ($grupo.l | tonumber) + 1
+                    ) as $n |
+
+                    [
+                        $pasta,
+                        (
+                            $grupo.n[0:4] +
+                            ("0000" + ($n | tostring))[-4:] +
+                            ".JPG"
+                        ),
+                        "0"
+                    ] | @tsv
+                else
+                    error("Nome de grupo nao suportado")
+                end
+            else
+                error("Grupo incompleto ou com fotos faltando")
+            end
+        else
+            [$pasta, .n, (.s // "" | tostring)] | @tsv
+        end
     ' "$1" | sort > "$2"
 }
 
@@ -286,8 +365,10 @@ baixar_foto() {
 
         log "DOWNLOAD_RESPOSTA arquivo=$origem tentativa=$tentativa esperado=$tamanho recebido=$recebido tipo=$tipo $resposta"
 
-        if [[ "$recebido" -eq "$tamanho" &&
-              "$tipo" == "JPEG" ]]; then
+        if [[ "$tipo" == "JPEG" ]] &&
+            jpeginfo -c "$arquivo.part" >/dev/null 2>&1 &&
+            { [[ "$tamanho" -eq 0 ]] ||
+                [[ "$recebido" -eq "$tamanho" ]]; }; then
 
             mv -f "$arquivo.part" "$arquivo"
             rm -f "$arquivo.part.headers"
@@ -339,8 +420,7 @@ sincronizar_fotos() {
             return 1
         }
 
-        [[ "$tamanho" =~ ^[0-9]+$ &&
-           "$tamanho" -gt 0 ]] || {
+        [[ "$tamanho" =~ ^[0-9]+$ ]] || {
             erro "Tamanho invalido: $pasta/$nome"
             return 1
         }
@@ -356,7 +436,9 @@ sincronizar_fotos() {
         mkdir -p "$(dirname "$arquivo")"
 
         if [[ ! -f "$arquivo" ]] ||
-           [[ "$(stat -c %s "$arquivo")" -ne "$tamanho" ]]; then
+            ! jpeginfo -c "$arquivo" >/dev/null 2>&1 ||
+            { [[ "$tamanho" -gt 0 ]] &&
+                [[ "$(stat -c %s "$arquivo")" -ne "$tamanho" ]]; }; then
 
             baixar_foto "$origem" "$arquivo" "$tamanho" ||
                 return 1
@@ -403,8 +485,8 @@ sincronizar_fotos() {
             ln "$arquivo" "$destino/$nome_final"
         fi
 
-        [[ "$(stat -c %s "$destino/$nome_final")" -eq "$tamanho" ]] || {
-            erro "Tamanho final invalido: $nome_final"
+        [[ "$arquivo" -ef "$destino/$nome_final" ]] || {
+            erro "Arquivo final divergente: $nome_final"
             return 1
         }
 
@@ -423,6 +505,9 @@ sincronizar_fotos() {
         erro "Inventario mudou durante backup; limpeza bloqueada"
         return 1
     }
+
+    # Confere todos os membros e o tamanho total dos grupos
+    validar_grupos "$TMP/conferencia.json" "$destino" || return 1
 
     # Autoriza limpeza apenas nesta execucao
     cp "$linhas" "$TMP/inventario_validado.tsv"
@@ -457,7 +542,7 @@ fechar_ciclo() {
 
 # Funcao interna: chamada apenas apos backup validado
 limpar_cartao() {
-    local VALIDAR=0
+    local VALIDAR=1
     local destino="$1"
     local tentativa pasta nome tamanho origem arquivo
 
@@ -466,7 +551,7 @@ limpar_cartao() {
         return 1
     }
 
-    if ["${VALIDAR}" == "1"]; then
+    if [[ "${VALIDAR}" == "1" ]]; then
         [[ -f "$TMP/inventario_validado.tsv" ]] || {
             erro "LIMPEZA_BLOQUEADA: falta backup validado nesta execucao"
             return 1
@@ -503,13 +588,16 @@ limpar_cartao() {
             arquivo="$destino/.originais/$origem"
 
             [[ -f "$arquivo" ]] &&
-            [[ "$(stat -c %s "$arquivo")" -eq "$tamanho" ]] || {
-
+            jpeginfo -c "$arquivo" >/dev/null 2>&1 &&
+            { [[ "$tamanho" -eq 0 ]] ||
+            [[ "$(stat -c %s "$arquivo")" -eq "$tamanho" ]]; } || {
                 erro "LIMPEZA_BLOQUEADA: copia ausente/incompleta de $origem"
                 return 1
             }
 
         done < "$TMP/inventario_validado.tsv"
+
+        validar_grupos "$TMP/antes_limpeza.json" "$destino" || return 1
 
         if [[ ! -s "$TMP/inventario_validado.tsv" ]]; then
             log "CARTAO_VAZIO: limpeza desnecessaria"
@@ -576,7 +664,7 @@ limpar_interativo() {
         return 1
     }
 
-    #sincronizar_fotos "$STAGING" || return 1
+    sincronizar_fotos "$STAGING" || return 1
 
     limpar_cartao "$STAGING"
 }
