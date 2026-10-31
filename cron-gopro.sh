@@ -277,8 +277,18 @@ reconciliar_tentativas() {
 
 # ===== DISPARO =====
 luz_auxiliar() {
-    local comando="$1"
-    /usr/local/bin/serverAPI.sh resources/LUZ_GROW_AUX/commands POST "{\"command\":\"$comando\"}"
+    local comando="${1:-}"
+    [[ "$comando" == "ON" || "$comando" == "OFF" ]] || return 2
+
+    [[ -f /etc/etomada-server.conf ]] || return 0
+    source /etc/etomada-server.conf
+
+    [[ -n "${LUZ_AUXILIAR_ID:-}" ]] || return 0
+
+    /usr/local/bin/serverAPI.sh resources/${LUZ_AUXILIAR_ID}/commands \
+            POST "{\"command\":\"$comando\"}" &> /dev/null
+
+    log "Luz auxiliar: ${comando}"
 }
 
 preparar_foto_unica() {
