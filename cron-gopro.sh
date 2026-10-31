@@ -347,7 +347,10 @@ foto_unica() {
     # Nao repetimos um obturador de resultado incerto.
     touch "$ESTADO/slots/$slot"
 
-    [[ "$tipo" == "AVULSA" || "$tipo" == "MANUAL" ]] && luz_auxiliar ON
+    [[ "$tipo" == "AVULSA" || "$tipo" == "MANUAL" ]] && {
+        luz_auxiliar ON
+        sleep 1
+    }
 
     comando bacpac/SH '%01' || {
         erro 'Obturador sem confirmacao; nao repetir automaticamente'
