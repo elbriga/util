@@ -276,6 +276,10 @@ reconciliar_tentativas() {
 }
 
 # ===== DISPARO =====
+luz_auxiliar() {
+    local comando="$1"
+    /usr/local/bin/serverAPI.sh resources/LUZ_GROW_AUX/commands POST "{\"command\":\"$comando\"}"
+}
 
 preparar_foto_unica() {
     # Para qualquer captura anterior e sai do modo timelapse.
@@ -322,10 +326,14 @@ foto_unica() {
     # Nao repetimos um obturador de resultado incerto.
     touch "$ESTADO/slots/$slot"
 
+    [[ "$tipo" == "AVULSA" || "$tipo" == "MANUAL" ]] && luz_auxiliar ON
+
     comando bacpac/SH '%01' || {
         erro 'Obturador sem confirmacao; nao repetir automaticamente'
         return 1
     }
+
+    [[ "$tipo" == "AVULSA" || "$tipo" == "MANUAL" ]] && luz_auxiliar OFF
 
     log "FOTO_DISPARADA tipo=$tipo slot=$slot"
     sleep 3
