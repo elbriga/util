@@ -11,7 +11,7 @@ GOPRO_SENHA="goprohero"
 WIFI_IFACE="wlan0"
 BACKUP="/srv/backup/gopro"
 ESTADO="/var/lib/gopro"
-MAX_FOTOS_SYNC=3                  # fotos sync por rodada
+MAX_FOTOS_SYNC=4                  # fotos sync por rodada
 PERMITIR_FORMATACAO=1             # 0 bloqueia inclusive 'limpar force'
 # =========================
 
