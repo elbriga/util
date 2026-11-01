@@ -375,17 +375,10 @@ foto_unica() {
 
 # ===== NOME E DESTINO =====
 
-# Pastas representam o ciclo iniciado as 22h;
-# 00h-21h59 pertence ao dia anterior.
 ciclo_da_foto() {
-    local data="${1:0:8}" hora="${1:9:2}"
-    local iso="${data:0:4}-${data:4:2}-${data:6:2}"
-
-    if (( 10#$hora >= 22 )); then
-        printf '%s\n' "$iso"
-    else
-        date -d "$iso - 1 day" '+%F'
-    fi
+    local data="${1:0:8}"
+    printf '%s-%s-%s\n' \
+        "${data:0:4}" "${data:4:2}" "${data:6:2}"
 }
 
 carregar_indice() {
