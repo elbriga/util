@@ -165,6 +165,7 @@ verificar_conexao() {
 
         if (( tentativa < 3 )); then
             log "GOPRO_SEM_RESPOSTA tentativa=$tentativa/3; tentando novamente"
+            nmcli con up GoPro
             sleep 2
         fi
     done
