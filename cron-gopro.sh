@@ -92,7 +92,7 @@ preparar() {
     MODO="${1:-}"
 
     for dep in curl jq jpeginfo exiftool flock stat date sort comm \
-               cmp mktemp ps setsid findmnt; do
+               cmp mktemp ps setsid findmnt mountpoint; do
         command -v "$dep" >/dev/null || {
             erro "Dependencia ausente: $dep"
             return 1
@@ -140,9 +140,14 @@ preparar() {
 verificar_backup() {
     local partuuid
 
-    # Consulta o ponto de montagem exato, sem aceitar o filesystem pai.
-    partuuid="$(findmnt --noheadings --raw --mountpoint "$BACKUP" \
-        --output PARTUUID)" || {
+    # Exige uma montagem exata antes de consultar o dispositivo visivel.
+    mountpoint -q -- "$BACKUP" || {
+        erro "Pendrive de backup nao montado em: $BACKUP"
+        return 1
+    }
+
+    # --target seleciona a montagem visivel; --first-only limita a uma linha.
+    partuuid="$(findmnt --noheadings --raw --first-only --target "$BACKUP" --output PARTUUID)" || {
         erro "Pendrive de backup nao montado em: $BACKUP"
         return 1
     }
