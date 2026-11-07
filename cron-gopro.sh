@@ -225,6 +225,10 @@ verificar_conexao() {
         fi
     done
 
+    if ! /usr/local/bin/mensagemTelegram.sh \
+        "ALERTA: GOPRO offline em ${HOSTNAME:-raspberrypi}, ip=$GOPRO_IP apos 3 tentativas ($(date '+%F %T'))"; then
+        log 'TELEGRAM_FALHOU: alerta de GOPRO offline nao enviado' >&2
+    fi
     erro "GOPRO_OFFLINE ip=$GOPRO_IP apos 3 tentativas"
 }
 
