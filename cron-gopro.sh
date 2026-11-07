@@ -9,7 +9,8 @@ set -Eeuo pipefail
 GOPRO_IP="10.5.5.9"
 GOPRO_SENHA="goprohero"
 WIFI_IFACE="wlan0"
-BACKUP="/srv/backup/gopro"
+BACKUP="/mnt/FOTOS"
+BACKUP_PARTUUID="af520aa2-31d3-44c4-ab07-9b87627d1037"
 ESTADO="/var/lib/gopro"
 MAX_FOTOS_SYNC=4                  # fotos sync por rodada
 PERMITIR_FORMATACAO=1             # 0 bloqueia inclusive 'limpar force'
@@ -91,7 +92,7 @@ preparar() {
     MODO="${1:-}"
 
     for dep in curl jq jpeginfo exiftool flock stat date sort comm \
-               cmp mktemp ps setsid; do
+               cmp mktemp ps setsid findmnt; do
         command -v "$dep" >/dev/null || {
             erro "Dependencia ausente: $dep"
             return 1
@@ -137,6 +138,20 @@ preparar() {
 }
 
 verificar_backup() {
+    local partuuid
+
+    # Consulta o ponto de montagem exato, sem aceitar o filesystem pai.
+    partuuid="$(findmnt --noheadings --raw --mountpoint "$BACKUP" \
+        --output PARTUUID)" || {
+        erro "Pendrive de backup nao montado em: $BACKUP"
+        return 1
+    }
+
+    [[ "$partuuid" == "$BACKUP_PARTUUID" ]] || {
+        erro "Dispositivo incorreto em $BACKUP: PARTUUID=${partuuid:-desconhecido}; esperado=$BACKUP_PARTUUID"
+        return 1
+    }
+
     [[ -d "$BACKUP" && -w "$BACKUP" ]] || {
         erro "Diretorio de backup ausente ou sem permissao de escrita: $BACKUP"
         return 1
