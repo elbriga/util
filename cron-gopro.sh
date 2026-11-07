@@ -5,6 +5,9 @@
 # */2 * * * * /usr/local/bin/cron-gopro.sh cron >> /var/log/cron-gopro.log 2>&1
 set -Eeuo pipefail
 
+# O cron pode fornecer um PATH sem os diretorios administrativos (runuser).
+export PATH="${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 # ===== CONFIGURACAO =====
 GOPRO_IP="10.5.5.9"
 GOPRO_SENHA="goprohero"
