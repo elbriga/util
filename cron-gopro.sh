@@ -11,6 +11,8 @@ GOPRO_SENHA="goprohero"
 WIFI_IFACE="wlan0"
 BACKUP="/mnt/FOTOS"
 BACKUP_PARTUUID="af520aa2-31d3-44c4-ab07-9b87627d1037"
+BACKUP_USER="fotos"
+BACKUP_PC="pc:"
 ESTADO="/var/lib/gopro"
 MAX_FOTOS_SYNC=4                  # fotos sync por rodada
 PERMITIR_FORMATACAO=1             # 0 bloqueia inclusive 'limpar force'
@@ -92,7 +94,7 @@ preparar() {
     MODO="${1:-}"
 
     for dep in curl jq jpeginfo exiftool flock stat date sort comm \
-               cmp mktemp ps setsid findmnt mountpoint; do
+               cmp mktemp ps setsid findmnt mountpoint rsync runuser id find; do
         command -v "$dep" >/dev/null || {
             erro "Dependencia ausente: $dep"
             return 1
@@ -161,6 +163,48 @@ verificar_backup() {
         erro "Diretorio de backup ausente ou sem permissao de escrita: $BACKUP"
         return 1
     }
+}
+
+sincronizar_pc() {
+    verificar_backup || return 1
+
+    local -a executar=()
+    if [[ "$(id -un)" != "$BACKUP_USER" ]]; then
+        [[ "$EUID" == 0 ]] || {
+            erro "Execute como root ou $BACKUP_USER para sincronizar com o PC"
+            return 1
+        }
+        executar=(runuser -u "$BACKUP_USER" --)
+    fi
+
+    # A barra final copia o conteudo para o HOME remoto, sem apagar no PC.
+    # Ignora downloads temporarios; checksum e usado antes da remocao local.
+    if "${executar[@]}" rsync -rav "${@}" --exclude='.*' \
+        -e 'ssh -o BatchMode=yes -o ConnectTimeout=10' \
+        -- "$BACKUP/" "$BACKUP_PC"; then
+        log 'BACKUP_PC_OK'
+    else
+        erro 'BACKUP_PC_FALHOU: fotos locais preservadas'
+        return 1
+    fi
+}
+
+remover_fotos_antigas() {
+    local ontem pasta data
+    verificar_backup || return 1
+    ontem="$(date -d yesterday +%F)" || return 1
+
+    for pasta in "$BACKUP"/*; do
+        [[ -d "$pasta" && ! -L "$pasta" ]] || continue
+        data="${pasta##*/}"
+        [[ "$data" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ &&
+           "$data" < "$ontem" ]] || continue
+
+        # Remove somente fotos; preserva temporarios e outros arquivos.
+        find "$pasta" -maxdepth 1 -type f -iname '*.jpg' -delete || return 1
+        rmdir -- "$pasta" 2>/dev/null || true
+        log "FOTOS_ANTIGAS_REMOVIDAS data=$data"
+    done
 }
 
 comando() {
@@ -573,8 +617,11 @@ sincronizar_fotos() {
 
         COPIADOS["$origem"]="$tamanho"$'\t'"$destino"
         ((qt+=1))
+        sincronizar_pc || return 1
     done < "$TMP/inventario.tsv"
 
+    # Reenvia pendencias mesmo quando nao ha fotos novas na camera.
+    (( qt > 0 )) || sincronizar_pc || return 1
     log "SINCRONIZACAO_OK novas=$qt"
 }
 
@@ -798,13 +845,18 @@ rotina() {
                 return 1
             }
 
+            # Confirma o backup remoto antes de apagar o cartao ou fotos locais.
+            sincronizar_pc --checksum || return 1
+
             # Apaga somente depois da validacao completa
             limpar_cartao || return 1
+
+            remover_fotos_antigas || return 1
 
             # Marca a limpeza concluida para nao repetir no mesmo dia
             : > "$marcador"
 
-            log "LIMPEZA_DIARIA_OK: cartao zerado; backup preservado no Raspberry Pi"
+            log "LIMPEZA_DIARIA_OK: cartao zerado; backup no PC; fotos de hoje e ontem preservadas no Raspberry Pi"
         fi
 
     else
