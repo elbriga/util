@@ -14,7 +14,8 @@ GOPRO_SENHA="goprohero"
 WIFI_IFACE="wlan0"
 BACKUP="/srv/backup/gopro"
 BACKUP_USER="fotos"
-BACKUP_PC="pc:"
+BACKUP_HOST="pc"
+BACKUP_PASTA=""
 ESTADO="/var/lib/gopro"
 MAX_FOTOS_SYNC=4                  # fotos sync por rodada
 PERMITIR_FORMATACAO=1             # 0 bloqueia inclusive 'limpar force'
@@ -96,7 +97,7 @@ preparar() {
     MODO="${1:-}"
 
     for dep in curl jq jpeginfo exiftool flock stat date sort comm \
-               cmp mktemp ps setsid rsync; do
+               cmp mktemp ps setsid rsync ping; do
         command -v "$dep" >/dev/null || {
             erro "Dependencia ausente: $dep"
             return 1
@@ -149,7 +150,13 @@ verificar_backup() {
 }
 
 sincronizar_pc() {
+    BACKUP_PC_OK=0
     verificar_backup || return 1
+
+    if ! ping -n -c 1 -W 2 -w 3 "$BACKUP_HOST" >/dev/null 2>&1; then
+        log "BACKUP_PC_ADIADO: $BACKUP_HOST sem resposta ao ping; continuando com backup local"
+        return 0
+    fi
 
     local -a executar=()
     if [[ "$(id -un)" != "$BACKUP_USER" ]]; then
@@ -164,11 +171,12 @@ sincronizar_pc() {
     # Ignora downloads temporarios; checksum e usado antes da remocao local.
     if "${executar[@]}" rsync -rav "${@}" --exclude='.*' \
         -e 'ssh -o BatchMode=yes -o ConnectTimeout=10' \
-        -- "$BACKUP/" "$BACKUP_PC"; then
+        -- "$BACKUP/" "$BACKUP_HOST:$BACKUP_PASTA"; then
+        BACKUP_PC_OK=1
         log 'BACKUP_PC_OK'
     else
-        erro 'BACKUP_PC_FALHOU: fotos locais preservadas'
-        return 1
+        log 'BACKUP_PC_FALHOU: fotos locais preservadas; envio pendente para proxima execucao'
+        return 0
     fi
 }
 
@@ -830,6 +838,10 @@ rotina() {
 
             # Confirma o backup remoto antes de apagar o cartao ou fotos locais.
             sincronizar_pc --checksum || return 1
+            if [[ "$BACKUP_PC_OK" != 1 ]]; then
+                log 'LIMPEZA_DIARIA_ADIADA: backup no PC pendente; cartao e fotos locais preservados'
+                return 0
+            fi
 
             # Apaga somente depois da validacao completa
             limpar_cartao || return 1
