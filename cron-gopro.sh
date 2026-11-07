@@ -94,7 +94,7 @@ preparar() {
     MODO="${1:-}"
 
     for dep in curl jq jpeginfo exiftool flock stat date sort comm \
-               cmp mktemp ps setsid findmnt mountpoint rsync runuser id find; do
+               cmp mktemp ps setsid findmnt mountpoint rsync; do
         command -v "$dep" >/dev/null || {
             erro "Dependencia ausente: $dep"
             return 1
