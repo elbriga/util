@@ -8,7 +8,8 @@ set -Eeuo pipefail
 # TL:     1 foto = 1 frame. A 30 fps, 30 fotos (uma hora) = 1 segundo.
 # AVULSA: 1 foto = 30 frames repetidos. Cada foto fica 1 segundo na tela.
 #
-# Uso: ./gopro-timelapse.sh cron
+# Uso: ./gopro-gera-timelapse.sh (lista vídeos e dias pendentes)
+#      ./gopro-timelapse.sh cron
 #      ./gopro-timelapse.sh dia 20261107
 # -----------------------------------------------------------------------------
 
@@ -31,6 +32,61 @@ ATRASO_FECHAMENTO_MIN=100   # Só fecha um dia 1h40 após a meia-noite seguinte.
 SEM_ALTERACOES_MIN=15       # Não trabalha com arquivos recebidos recentemente.
 
 log() { printf '[%(%F %T)T] %s\n' -1 "$*"; }
+
+listar_status() {
+    local arquivo nome dia data_iso pasta encontrados=0 pendentes=0
+    local -a dias=()
+    local -A fotos_por_dia=() pastas_por_dia=()
+
+    printf 'Vídeos gerados (%s):\n' "$DIR_VIDEOS"
+    if [[ -d "$DIR_VIDEOS" ]]; then
+        while IFS= read -r -d '' arquivo; do
+            printf '  %s\n' "$arquivo"
+            encontrados=1
+        done < <(find "$DIR_VIDEOS" -maxdepth 1 -type f -iname '*.mp4' -print0 | sort -z)
+    fi
+    (( encontrados > 0 )) || printf '  Nenhum vídeo gerado.\n'
+
+    printf '\nPastas/dias pendentes (sem MP4):\n'
+    if [[ ! -d "$DIR_FOTOS" ]]; then
+        printf '  Pasta de fotos inexistente: %s\n' "$DIR_FOTOS"
+        return 0
+    fi
+    while IFS= read -r -d '' arquivo; do
+        nome="${arquivo##*/}"
+        [[ "$nome" =~ ^([0-9]{8})_[0-9]{6}_(TL|AVULSA)_.+\.[Jj][Pp][Gg]$ ]] || continue
+        dia="${BASH_REMATCH[1]}"
+        data_iso="${dia:0:4}-${dia:4:2}-${dia:6:2}"
+        [[ -s "$DIR_VIDEOS/$data_iso.mp4" ]] && continue
+        fotos_por_dia["$dia"]=$(( ${fotos_por_dia[$dia]:-0} + 1 ))
+        pasta="${arquivo%/*}"
+        pastas_por_dia["$dia/$pasta"]="$pasta"
+    done < <(find "$DIR_FOTOS" -type f -iname '*.jpg' -print0)
+
+    if (( ${#fotos_por_dia[@]} > 0 )); then
+        mapfile -t dias < <(printf '%s\n' "${!fotos_por_dia[@]}" | LC_ALL=C sort)
+        for dia in "${dias[@]}"; do
+            printf '  %s-%s-%s: %s foto(s)\n' "${dia:0:4}" "${dia:4:2}" "${dia:6:2}" "${fotos_por_dia[$dia]}"
+            while IFS= read -r -d '' pasta; do
+                printf '    %s\n' "$pasta"
+            done < <(
+                for nome in "${!pastas_por_dia[@]}"; do
+                    [[ "$nome" == "$dia/"* ]] || continue
+                    printf '%s\0' "${pastas_por_dia[$nome]}"
+                done | LC_ALL=C sort -z
+            )
+        done
+        pendentes=1
+    fi
+    (( pendentes > 0 )) || printf '  Nenhum dia pendente.\n'
+    return 0
+}
+
+# Consulta somente leitura, disponível mesmo durante uma codificação.
+if (( $# == 0 )); then
+    listar_status
+    exit 0
+fi
 
 # Impede duas execuções simultâneas e remove os links temporários no final.
 TEMP_DIR=""
