@@ -191,9 +191,8 @@ remover_fotos_antigas() {
         [[ "$data" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ &&
            "$data" < "$ontem" ]] || continue
 
-        # Remove somente fotos; preserva temporarios e outros arquivos.
-        find "$pasta" -maxdepth 1 -type f -iname '*.jpg' -delete || return 1
-        rmdir -- "$pasta" 2>/dev/null || true
+        # A retencao depende apenas do nome da pasta diaria.
+        rm -rf -- "$pasta" || return 1
         log "FOTOS_ANTIGAS_REMOVIDAS data=$data"
     done
 }
@@ -866,7 +865,7 @@ rotina() {
 
 
 uso() {
-    echo "Uso: $0 [cron|status|foto|sincronizar|relogio|bip-off|limpar [force]]"
+    echo "Uso: $0 [cron|status|foto|sincronizar|remover-fotos-antigas|relogio|bip-off|limpar [force]]"
 }
 
 main() {
@@ -887,6 +886,14 @@ main() {
             ;;
         sincronizar)
             verificar_conexao && sincronizar_fotos
+            ;;
+        remover-fotos-antigas)
+            sincronizar_pc --checksum || return 1
+            if [[ "$BACKUP_PC_OK" != 1 ]]; then
+                erro 'REMOCAO_CANCELADA: backup no PC pendente; pastas locais preservadas'
+                return 1
+            fi
+            remover_fotos_antigas
             ;;
         relogio)
             verificar_conexao && acertar_relogio
