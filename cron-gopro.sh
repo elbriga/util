@@ -168,9 +168,9 @@ sincronizar_pc() {
     fi
 
     # A barra final copia o conteudo para o HOME remoto, sem apagar no PC.
-    # Ignora downloads temporarios; checksum e usado antes da remocao local.
+    # Ignora downloads temporarios; a limpeza diaria solicita checksum.
     if "${executar[@]}" rsync -rav "${@}" --exclude='.*' \
-        -e 'ssh -o BatchMode=yes -o ConnectTimeout=10' \
+        -e 'ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3' \
         -- "$BACKUP/" "$BACKUP_HOST:$BACKUP_PASTA"; then
         BACKUP_PC_OK=1
         log 'BACKUP_PC_OK'
@@ -888,7 +888,10 @@ main() {
             verificar_conexao && sincronizar_fotos
             ;;
         remover-fotos-antigas)
-            sincronizar_pc --checksum || return 1
+            # Evita reler todas as fotos locais e remotas antes da transferencia.
+            # O rsync compara tamanho/data e verifica os arquivos transferidos.
+            log 'REMOCAO: sincronizando com o PC antes de remover as pastas antigas'
+            sincronizar_pc --info=progress2 --timeout=120 || return 1
             if [[ "$BACKUP_PC_OK" != 1 ]]; then
                 erro 'REMOCAO_CANCELADA: backup no PC pendente; pastas locais preservadas'
                 return 1
