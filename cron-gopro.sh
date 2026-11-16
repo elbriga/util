@@ -840,7 +840,7 @@ rotina() {
             }
 
             # Confirma o backup remoto antes de apagar o cartao ou fotos locais.
-            sincronizar_pc --checksum || return 1
+            sincronizar_pc --info=progress2 --timeout=120 || return 1
             if [[ "$BACKUP_PC_OK" != 1 ]]; then
                 log 'LIMPEZA_DIARIA_ADIADA: backup no PC pendente; cartao e fotos locais preservados'
                 return 0
