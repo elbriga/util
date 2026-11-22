@@ -28,7 +28,7 @@ LARGURA=1920
 ALTURA=1080
 CRF=20                      # Qualidade H.264: menor = melhor e maior arquivo.
 PRESET="medium"             # Mais lento = melhor compressão (ex.: slow).
-ATRASO_FECHAMENTO_MIN=100   # Só fecha um dia 1h40 após a meia-noite seguinte.
+ATRASO_FECHAMENTO_MIN=30    # Só fecha um dia 0h30 após a meia-noite seguinte.
 SEM_ALTERACOES_MIN=15       # Não trabalha com arquivos recebidos recentemente.
 
 log() { printf '[%(%F %T)T] %s\n' -1 "$*"; }

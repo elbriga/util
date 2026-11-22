@@ -847,8 +847,10 @@ rotina() {
             fi
 
             # Apaga somente depois da validacao completa
+            log "limpar_cartao"
             limpar_cartao || return 1
 
+            log "remover_fotos_antigas"
             remover_fotos_antigas || return 1
 
             # Marca a limpeza concluida para nao repetir no mesmo dia
