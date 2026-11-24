@@ -474,7 +474,9 @@ carregar_arquivos_pc() {
     # Protege o caminho para o shell remoto, inclusive espacos e aspas.
     pasta_escapada="${BACKUP_PASTA//\'/\'\\\'\'}"
     log 'BACKUP_PC_CONSULTA: conferindo fotos ja copiadas'
-    if ! "${executar[@]}" ssh -o BatchMode=yes -o ConnectTimeout=10 \
+    # A consulta ocorre dentro do while que le o inventario: sem -n, o ssh
+    # pode consumir as linhas restantes e impedir o download das fotos novas.
+    if ! "${executar[@]}" ssh -n -o BatchMode=yes -o ConnectTimeout=10 \
         -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
         "$BACKUP_HOST" \
         "find '$pasta_escapada' -type f -printf '%s\\t%P\\n'" \
@@ -601,6 +603,7 @@ sincronizar_fotos() {
                     # Mesma tolerancia de tamanho de jpeg_valido; grupos usam 0.
                     if (( remoto > 0 && (tamanho == 0 || remoto == tamanho || remoto + 1 == tamanho) )); then
                         ((no_pc+=1))
+                        log "SYNC_JA_NO_PC origem=$origem destino=$BACKUP_HOST:$relativo"
                         continue
                     fi
                 fi
