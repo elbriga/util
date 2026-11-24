@@ -603,7 +603,6 @@ sincronizar_fotos() {
                     # Mesma tolerancia de tamanho de jpeg_valido; grupos usam 0.
                     if (( remoto > 0 && (tamanho == 0 || remoto == tamanho || remoto + 1 == tamanho) )); then
                         ((no_pc+=1))
-                        log "SYNC_JA_NO_PC origem=$origem destino=$BACKUP_HOST:$relativo"
                         continue
                     fi
                 fi
