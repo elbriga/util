@@ -17,7 +17,7 @@ BACKUP_USER="fotos"
 BACKUP_HOST="pc"
 BACKUP_PASTA="/home/gabriel/fotos/"
 ESTADO="/var/lib/gopro"
-MAX_FOTOS_SYNC=4                  # fotos sync por rodada
+MAX_FOTOS_SYNC=6                  # fotos sync por rodada
 PERMITIR_FORMATACAO=1             # 0 bloqueia inclusive 'limpar force'
 # =========================
 
