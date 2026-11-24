@@ -102,7 +102,7 @@ preparar() {
     MODO="${1:-}"
 
     for dep in curl jq jpeginfo exiftool flock stat date sort comm \
-               cmp mktemp ps setsid rsync ping; do
+               cmp mktemp ps setsid rsync ssh ping; do
         command -v "$dep" >/dev/null || {
             erro "Dependencia ausente: $dep"
             return 1
@@ -457,6 +457,38 @@ carregar_indice() {
     done < "$INDICE"
 }
 
+# Consulta unica por sincronizacao, inclusive para indices anteriores a esta regra.
+# Nao depende de a copia ainda existir no Raspberry Pi.
+carregar_arquivos_pc() {
+    local tamanho relativo pasta_escapada
+    local -a executar=()
+
+    if [[ "$(id -un)" != "$BACKUP_USER" ]]; then
+        [[ "$EUID" == 0 ]] || {
+            erro "Execute como root ou $BACKUP_USER para consultar o PC"
+            return 1
+        }
+        executar=(runuser -u "$BACKUP_USER" --)
+    fi
+
+    # Protege o caminho para o shell remoto, inclusive espacos e aspas.
+    pasta_escapada="${BACKUP_PASTA//\'/\'\\\'\'}"
+    log 'BACKUP_PC_CONSULTA: conferindo fotos ja copiadas'
+    if ! "${executar[@]}" ssh -o BatchMode=yes -o ConnectTimeout=10 \
+        -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+        "$BACKUP_HOST" \
+        "find '$pasta_escapada' -type f -printf '%s\\t%P\\n'" \
+        > "$TMP/arquivos_pc.tsv"; then
+        erro 'BACKUP_PC_CONSULTA_FALHOU: sincronizacao adiada para evitar baixar fotos ja arquivadas'
+        return 1
+    fi
+
+    while IFS=$'\t' read -r tamanho relativo; do
+        [[ "$tamanho" =~ ^[0-9]+$ && -n "$relativo" ]] || continue
+        ARQUIVOS_PC["$relativo"]="$tamanho"
+    done < "$TMP/arquivos_pc.tsv"
+}
+
 jpeg_valido() {
     local arquivo="$1" esperado="$2" bytes
 
@@ -527,6 +559,8 @@ sincronizar_fotos() {
     local pasta nome tamanho origem linha caminho instante tipo data ciclo destino
     local qt=0
     local limite="${1:-$MAX_FOTOS_SYNC}"
+    local exigir_local="${2:-0}" pc_consultado=0 no_pc=0 remoto relativo
+    local -A ARQUIVOS_PC=()
 
     verificar_backup || return 1
 
@@ -554,8 +588,22 @@ sincronizar_fotos() {
 
         if [[ -n "$linha" ]]; then
             IFS=$'\t' read -r data caminho <<< "$linha"
-            if [[ "$data" == "$tamanho" && -s "$caminho" ]]; then
-                continue
+            if [[ "$data" == "$tamanho" ]]; then
+                [[ ! -s "$caminho" ]] || continue
+
+                if [[ "$exigir_local" == 0 && "$caminho" == "$BACKUP/"* ]]; then
+                    if [[ "$pc_consultado" == 0 ]]; then
+                        carregar_arquivos_pc || return 1
+                        pc_consultado=1
+                    fi
+                    relativo="${caminho#"$BACKUP/"}"
+                    remoto="${ARQUIVOS_PC[$relativo]:-0}"
+                    # Mesma tolerancia de tamanho de jpeg_valido; grupos usam 0.
+                    if (( remoto > 0 && (tamanho == 0 || remoto == tamanho || remoto + 1 == tamanho) )); then
+                        ((no_pc+=1))
+                        continue
+                    fi
+                fi
             fi
         fi
 
@@ -623,7 +671,7 @@ sincronizar_fotos() {
 
     # Reenvia pendencias mesmo quando nao ha fotos novas na camera.
     (( qt > 0 )) || sincronizar_pc || return 1
-    log "SINCRONIZACAO_OK novas=$qt"
+    log "SINCRONIZACAO_OK novas=$qt ja_no_pc=$no_pc"
 }
 
 # ===== LIMPEZA =====
@@ -675,7 +723,8 @@ validar_backup_para_limpeza() {
     local inicio=$SECONDS inicio_jpegs total validadas=0
 
     # Limite 0 significa sincronizar tudo (uso na limpeza manual)
-    sincronizar_fotos "${1:-0}" || return 1
+    # A exclusao do cartao exige JPEGs locais para a validacao completa.
+    sincronizar_fotos "${1:-0}" 1 || return 1
 
     cp "$TMP/inventario.tsv" "$TMP/validado.tsv"
 
