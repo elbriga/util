@@ -51,7 +51,7 @@ interromper_cron_anterior() {
        "$cmd" == *"$(basename "$0")"* &&
        "$cmd" == *" cron"* ]] || return 1
 
-    # Nao interrompe exclusao de midias em andamento
+    # A limpeza inclui sincronizacao, validacao e confirmacao do backup.
     if [[ -e "$ESTADO/limpeza_critica_$pid" ]]; then
         log "CRON_ANTERIOR_EM_LIMPEZA: pid=$pid; nao interrompido"
         return 1
@@ -76,7 +76,12 @@ interromper_cron_anterior() {
 }
 
 finalizar() {
+    local rc=$?
     local pid inicio
+
+    if [[ "${MODO:-}" == cron ]]; then
+        log "CRON_FINALIZADO pid=$$ rc=$rc duracao=$((SECONDS - ${CRON_SEGUNDOS_INICIO:-SECONDS}))s"
+    fi
 
     [[ -z "${TMP:-}" ]] || rm -rf -- "$TMP"
 
@@ -126,6 +131,7 @@ preparar() {
 
     if [[ "$MODO" == cron ]]; then
         CRON_START="$(awk '{print $22}' "/proc/$$/stat")"
+        CRON_SEGUNDOS_INICIO=$SECONDS
 
         printf '%s %s\n' "$$" "$CRON_START" \
             > "$ESTADO/cron.pid"
@@ -137,7 +143,8 @@ preparar() {
     TMP="$(mktemp -d "$ESTADO/tmp.XXXXXXXX")"
 
     trap finalizar EXIT
-    trap 'exit 143' TERM INT
+    trap 'log "EXECUCAO_INTERROMPIDA pid=$$ sinal=TERM"; exit 143' TERM
+    trap 'log "EXECUCAO_INTERROMPIDA pid=$$ sinal=INT"; exit 130' INT
 
     touch "$INDICE" "$CAPTURAS"
 }
@@ -665,12 +672,14 @@ limpar_cartao() {
 # Compara o inventario e testa todos os JPEGs antes da limpeza normal.
 validar_backup_para_limpeza() {
     local pasta nome tamanho origem linha esperado caminho
+    local inicio=$SECONDS inicio_jpegs total validadas=0
 
     # Limite 0 significa sincronizar tudo (uso na limpeza manual)
     sincronizar_fotos "${1:-0}" || return 1
 
     cp "$TMP/inventario.tsv" "$TMP/validado.tsv"
 
+    log 'VALIDACAO_INVENTARIO_INICIADA: consultando cartao novamente'
     listar_midias "$TMP/antes_limpeza.json" || return 1
     inventario_tsv "$TMP/antes_limpeza.json" \
         "$TMP/antes_limpeza.tsv" || return 1
@@ -681,6 +690,9 @@ validar_backup_para_limpeza() {
     }
 
     carregar_indice
+    total="$(wc -l < "$TMP/validado.tsv")"
+    inicio_jpegs=$SECONDS
+    log "VALIDACAO_JPEGS_INICIADA total=$total"
 
     while IFS=$'\t' read -r pasta nome tamanho; do
         [[ -n "${pasta:-}" ]] || continue
@@ -700,7 +712,14 @@ validar_backup_para_limpeza() {
             erro "JPEG nao validado para exclusao: $origem"
             return 1
         }
+
+        ((validadas+=1))
+        if (( validadas % 100 == 0 || validadas == total )); then
+            log "VALIDACAO_JPEGS_PROGRESSO validadas=$validadas total=$total duracao=$((SECONDS - inicio_jpegs))s origem=$origem"
+        fi
     done < "$TMP/validado.tsv"
+
+    log "VALIDACAO_JPEGS_OK validadas=$validadas duracao=$((SECONDS - inicio_jpegs))s"
 
     # Timelapses antigos: o campo 's' representa o tamanho do grupo.
     local p n b l s soma i membro caminho esperado grupo
@@ -711,6 +730,7 @@ validar_backup_para_limpeza() {
         [$p,.n,.b,.l,.s] | @tsv
     ' "$TMP/antes_limpeza.json" > "$TMP/grupos.tsv" || return 1
 
+    log 'VALIDACAO_GRUPOS_INICIADA'
     while IFS=$'\t' read -r p n b l s; do
         [[ -n "${p:-}" ]] || continue
 
@@ -741,7 +761,7 @@ validar_backup_para_limpeza() {
         }
     done < "$TMP/grupos.tsv"
 
-    log 'BACKUP_VALIDADO_PARA_LIMPEZA'
+    log "BACKUP_VALIDADO_PARA_LIMPEZA duracao=$((SECONDS - inicio))s"
 }
 
 limpar_interativo() {
@@ -831,6 +851,9 @@ rotina() {
             log "AVISO: limpeza diaria bloqueada (PERMITIR_FORMATACAO=0)"
 
         else
+            # Protege tambem a validacao completa, que pode exceder os 2 min
+            # entre crons. O marcador e removido por finalizar ao sair.
+            : > "$ESTADO/limpeza_critica_$$"
             log "LIMPEZA_DIARIA: sincronizando e validando cartao"
 
             # Sincroniza e valida tudo que ainda estiver no cartao
@@ -840,6 +863,7 @@ rotina() {
             }
 
             # Confirma o backup remoto antes de apagar o cartao ou fotos locais.
+            log 'LIMPEZA_DIARIA_BACKUP_PC_INICIADO'
             sincronizar_pc --info=progress2 --timeout=120 || return 1
             if [[ "$BACKUP_PC_OK" != 1 ]]; then
                 log 'LIMPEZA_DIARIA_ADIADA: backup no PC pendente; cartao e fotos locais preservados'
